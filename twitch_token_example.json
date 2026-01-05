@@ -1,0 +1,10 @@
+{
+  "access_token": "abc123",
+  "expires_in": 42069,
+  "refresh_token": "test123test123test123test123",
+  "scope": [
+    "user:read:follows"
+  ],
+  "token_type": "bearer",
+  "obtained_at": 123456789
+}
