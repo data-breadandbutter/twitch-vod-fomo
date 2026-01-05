@@ -29,6 +29,9 @@ def utcnow():
 def iso(dt):
     return dt.isoformat().replace("+00:00", "Z")
 
+def pause():
+    input("\nPress Enter to continue...")
+
 
 # ================= TOKEN HANDLING =================
 
@@ -134,11 +137,78 @@ def print_cache_summary(cache):
 def show_request(cache, req_id):
     for r in cache["requests"]:
         if r["id"] == req_id:
-            for v in r["vods"]:
+            vods = r["vods"]
+
+            include = choose_channels(vods)
+            if include:
+                vods = filter_vods(vods, include=include)
+
+            print(f"\nShowing {len(vods)} VODs\n")
+            for v in vods:
                 print(f"{v['channel']}: {v['title']}")
                 print(f"  {v['url']}\n")
             return
+
     print("Request not found.\n")
+
+
+
+def list_channels(vods):
+    return sorted({v["channel"] for v in vods})
+
+
+def parse_selection(selection, max_index):
+    chosen = set()
+
+    for part in selection.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        if "-" in part:
+            start, end = part.split("-", 1)
+            chosen.update(range(int(start), int(end) + 1))
+        else:
+            chosen.add(int(part))
+
+    return [i for i in chosen if 1 <= i <= max_index]
+
+def choose_channels(vods):
+    channels = list_channels(vods)
+
+    if not channels:
+        print("No channels found.")
+        return None  # no filter
+
+    print("\nAvailable channels:")
+    for i, ch in enumerate(channels, start=1):
+        print(f"  [{i}] {ch}")
+
+    selection = input(
+        "\nSelect channels by number "
+        "(e.g. 1,3-5 or Enter for all): "
+    ).strip()
+
+    if not selection:
+        return None  # no filter
+
+    indexes = parse_selection(selection, len(channels))
+    return [channels[i - 1] for i in indexes]
+
+
+def filter_vods(vods, include=None):
+    """
+    include: list of channel names (case-insensitive)
+    """
+    if not include:
+        return vods
+
+    include = {c.lower() for c in include}
+
+    return [
+        v for v in vods
+        if v["channel"].lower() in include
+    ]
 
 
 # ================= TWITCH API =================
@@ -187,79 +257,92 @@ def get_recent_vods(headers, broadcaster_id, since):
 
 # ================= MAIN =================
 
-
 def main():
     cache = load_cache()
 
-    if cache["requests"]:
-        last = cache["requests"][-1]
-        print(
-            f"\nLast request was at {last['requested_at']} "
-            f"(delta {last['timedelta_days']} days)"
-        )
-        print("Options:")
+    while True:
+        print("\n===== Twitch VOD Tool =====")
+
+        if cache["requests"]:
+            last = cache["requests"][-1]
+            print(
+                f"Last request: {last['requested_at']} "
+                f"(delta {last['timedelta_days']} days)"
+            )
+        else:
+            print("No previous requests.")
+
+        print("\nOptions:")
         print("  [1] Load last saved request (no API)")
         print("  [2] Make a new request")
         print("  [3] List all saved requests")
         print("  [4] View a specific request")
-        choice = input("Choose: ").strip()
+        print("  [q] Quit")
+
+        choice = input("\nChoose: ").strip().lower()
+
+        if choice == "q":
+            print("Goodbye")
+            break
 
         if choice == "1":
-            show_request(cache, last["id"])
-            return
+            if cache["requests"]:
+                show_request(cache, cache["requests"][-1]["id"])
+            else:
+                print("No saved requests.")
+            pause()
+            continue
+
+        if choice == "2":
+            days = int(input("How many days back? "))
+            since = utcnow() - timedelta(days=days)
+
+            token = get_token()
+            headers = helix_headers(token)
+
+            user_id = get_user_id(headers)
+            followed = get_followed(headers, user_id)
+
+            vods = []
+
+            for ch in followed:
+                recent = get_recent_vods(headers, ch["broadcaster_id"], since)
+                for v in recent:
+                    vods.append(
+                        {
+                            "channel": ch["broadcaster_name"],
+                            **v,
+                        }
+                    )
+
+            req = {
+                "id": len(cache["requests"]) + 1,
+                "requested_at": iso(utcnow()),
+                "since": iso(since),
+                "timedelta_days": days,
+                "vods": vods,
+            }
+
+            cache["requests"].append(req)
+            save_cache(cache)
+
+            print(f"\nSaved request {req['id']} ({len(vods)} VODs)")
+            show_request(cache, req["id"])
+            pause()
+            continue
+
         if choice == "3":
             print_cache_summary(cache)
-            return
+            pause()
+            continue
+
         if choice == "4":
             req_id = int(input("Request ID: "))
             show_request(cache, req_id)
-            return
+            pause()
+            continue
 
-    # New request
-    days = input("How many days back? ")
-    
-    
-    try:
-        if int(days) > 0 or int(days) < 8:
-            days = int(days)
-        else:
-            days = 3
-    except:
-        days = 3
-    
-    since = utcnow() - timedelta(days=days)
-
-    token = get_token()
-    headers = helix_headers(token)
-
-    user_id = get_user_id(headers)
-    followed = get_followed(headers, user_id)
-
-    vods = []
-
-    for ch in followed:
-        recent = get_recent_vods(headers, ch["broadcaster_id"], since)
-        for v in recent:
-            vods.append(
-                {
-                    "channel": ch["broadcaster_name"],
-                    **v,
-                }
-            )
-
-    req = {
-        "id": len(cache["requests"]) + 1,
-        "requested_at": iso(utcnow()),
-        "since": iso(since),
-        "timedelta_days": days,
-        "vods": vods,
-    }
-
-    cache["requests"].append(req)
-    save_cache(cache)
-
-    print(f"\nSaved request {req['id']} ({len(vods)} VODs)\n")
-    show_request(cache, req["id"])
+        print("Invalid choice.")
 
 
 if __name__ == "__main__":
